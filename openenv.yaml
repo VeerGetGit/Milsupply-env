@@ -16,6 +16,8 @@ tags:
   - defense
   - resource-allocation
 
+env_url: "https://RegeeHugging-Milsupply-env.hf.space"
+
 tasks:
   - name: priority-classify
     difficulty: easy
@@ -25,6 +27,8 @@ tasks:
       The stated urgency from requesting units may be inaccurate.
     score_range: [0.0, 1.0]
     max_steps: 1
+    reset_endpoint: /reset
+    step_endpoint: /step
 
   - name: shortage-detect
     difficulty: medium
@@ -34,6 +38,8 @@ tasks:
       delayed more than 3 days, and requested by combat-critical units).
     score_range: [0.0, 1.0]
     max_steps: 1
+    reset_endpoint: /reset
+    step_endpoint: /step
 
   - name: optimize-allocation
     difficulty: hard
@@ -43,6 +49,8 @@ tasks:
       exceed available quantities for any item.
     score_range: [0.0, 1.0]
     max_steps: 1
+    reset_endpoint: /reset
+    step_endpoint: /step
 
 observation_space:
   type: object
@@ -63,7 +71,7 @@ reward:
   range: [0.0, 1.0]
   description: >
     Partial credit reward based on task-specific grader:
-    - priority-classify: fraction correct, minus penalty for critical→routine errors
+    - priority-classify: fraction correct, minus penalty for critical to routine errors
     - shortage-detect: F1 score against ground truth shortage set
     - optimize-allocation: weighted readiness gain across units (halved if over-allocated)
 
