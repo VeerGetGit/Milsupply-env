@@ -136,6 +136,9 @@ class MilSupplyEnvironment(Environment):
         task = action.task if hasattr(action, "task") and action.task else self._state.active_task
         action_dict = action.dict() if hasattr(action, "dict") else {}
 
+        if self._current_observation is None:
+            self.reset(task)
+
         if task == "shortage-detect":
             reward = GRADERS["shortage-detect"](
                 action_dict,
