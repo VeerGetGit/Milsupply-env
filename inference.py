@@ -2,19 +2,6 @@
 Inference Script — milsupply-env
 ===================================
 Military Logistics & Supply Chain OpenEnv Baseline
-
-Environment variables required:
-  API_BASE_URL   The API endpoint for the LLM.
-  MODEL_NAME     The model identifier to use for inference.
-  HF_TOKEN       Your Hugging Face / API key.
-
-Usage:
-  export API_BASE_URL=https://router.huggingface.co/v1
-  export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-  export HF_TOKEN=hf_xxx
-  export MILSUPPLY_TASK=priority-classify   # or shortage-detect / optimize-allocation
-  export MILSUPPLY_ENV_URL=http://localhost:7860
-  python inference.py
 """
 
 import json
@@ -35,13 +22,15 @@ MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 TASK_NAME = os.getenv("MILSUPPLY_TASK", "priority-classify")
 ENV_URL = os.getenv("MILSUPPLY_ENV_URL", "http://localhost:7860").rstrip("/")
 BENCHMARK = "milsupply-env"
-MAX_STEPS = 1          # all tasks are single-step in this env
-TEMPERATURE = 0.2      # low temp for deterministic structured output
+
+MAX_STEPS = 1
+TEMPERATURE = 0.2
 MAX_TOKENS = 1024
 SUCCESS_SCORE_THRESHOLD = 0.5
 
+
 # ---------------------------------------------------------------------------
-# Logging helpers (competition format)
+# Logging helpers
 # ---------------------------------------------------------------------------
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -51,8 +40,8 @@ def log_start(task: str, env: str, model: str) -> None:
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     error_val = error if error else "null"
     done_val = str(done).lower()
-    # Truncate action for log readability (keep it single-line)
-    action_log = action.replace("\n", " ")[:200]
+    action_log = action.replace("\n", " ")
+
     print(
         f"[STEP] step={step} action={action_log} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
@@ -61,11 +50,14 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Environment client
+# Environment API
 # ---------------------------------------------------------------------------
 
 def env_reset(task: str) -> Dict[str, Any]:
@@ -82,133 +74,50 @@ def env_step(task: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Task-specific prompts and response parsers
+# Prompts
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPTS = {
-    "priority-classify": textwrap.dedent("""
-        You are a military logistics officer responsible for triaging supply requests.
-        You will receive a list of supply requests from various units.
-        For each request, classify the true priority as: critical, high, or routine.
-        
-        Guidelines:
-        - critical: life-safety items, combat ammunition, medical supplies in active combat zones, needed within hours
-        - high: operationally important, needed within 24 hours
-        - routine: administrative or non-urgent, can wait 72+ hours
-        
-        Note: The urgency stated by the requesting unit may be inaccurate (units tend to over-state urgency).
-        Use your judgment based on the item type and mission_criticality field.
-        
-        You MUST respond with ONLY a valid JSON object in this exact format:
-        {"classifications": {"REQ-001": "critical", "REQ-002": "routine", ...}}
-        
-        No explanation, no markdown, no extra text. JSON only.
-    """).strip(),
-
-    "shortage-detect": textwrap.dedent("""
-        You are a military supply chain analyst.
-        You will receive current inventory levels and pending supply requests from units.
-        
-        Identify items that are CRITICALLY SHORT using these criteria:
-        1. quantity_available < reorder_threshold (stock is below minimum)
-        2. days_until_resupply > 3 (resupply is not imminent)
-        3. There is a pending request for that item from a combat or high-criticality unit
-        
-        ALL THREE criteria must be met for an item to be critically short.
-        
-        You MUST respond with ONLY a valid JSON object in this exact format:
-        {"shortage_items": ["item name 1", "item name 2", ...]}
-        
-        Use the exact item names as they appear in the inventory.
-        No explanation, no markdown, no extra text. JSON only.
-    """).strip(),
-
-    "optimize-allocation": textwrap.dedent("""
-        You are a theater logistics commander responsible for allocating scarce supplies.
-        You will receive available stock and a list of units with their critical needs.
-        
-        Your goal: allocate supplies to MAXIMIZE overall operational readiness across all units.
-        
-        Rules:
-        - You CANNOT exceed the available_stock quantity for any item
-        - Prioritize units with more personnel and lower current readiness
-        - Combat-mission units take priority over support units
-        - Partial allocation is better than no allocation
-        - You do not have to allocate all stock
-        
-        You MUST respond with ONLY a valid JSON object in this exact format:
-        {"allocations": [
-            {"unit": "Unit Name", "item": "item name", "quantity_allocated": 100},
-            ...
-        ]}
-        
-        Use exact unit names and item names as they appear in the observation.
-        No explanation, no markdown, no extra text. JSON only.
-    """).strip(),
+    "priority-classify": "You are a logistics officer. Return JSON only.",
+    "shortage-detect": "You are a supply analyst. Return JSON only.",
+    "optimize-allocation": "You are a commander. Return JSON only.",
 }
 
 
-def build_user_prompt(task: str, observation: Dict[str, Any]) -> str:
-    """Convert observation dict to a readable prompt for the model."""
-    obs_json = json.dumps(observation, indent=2)
-    return f"Here is the current situation:\n\n{obs_json}\n\nProvide your response now."
+def build_user_prompt(observation: Dict[str, Any]) -> str:
+    return f"Situation:\n{json.dumps(observation, indent=2)}\n\nReturn JSON only."
 
 
-def parse_model_response(task: str, text: str) -> Dict[str, Any]:
-    """Parse the model's JSON response into a task payload."""
-    # Strip markdown fences if present
+def parse_model_response(text: str) -> Dict[str, Any]:
     text = text.strip()
+
     if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
-    text = text.strip()
+        text = text.strip("`")
+        text = text.replace("json", "").strip()
 
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        # Attempt to extract JSON from the text
-        import re
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-        else:
-            # Return a safe fallback per task
-            fallbacks = {
-                "priority-classify": {"classifications": {}},
-                "shortage-detect": {"shortage_items": []},
-                "optimize-allocation": {"allocations": []},
-            }
-            return fallbacks.get(task, {})
-
-    return data
+        return json.loads(text)
+    except Exception:
+        return {}
 
 
 def get_model_action(client: OpenAI, task: str, observation: Dict[str, Any]) -> Dict[str, Any]:
-    """Call the LLM and return a parsed action payload."""
-    user_prompt = build_user_prompt(task, observation)
-    system_prompt = SYSTEM_PROMPTS[task]
-
     try:
         completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": SYSTEM_PROMPTS[task]},
+                {"role": "user", "content": build_user_prompt(observation)},
             ],
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
-            stream=False,
         )
-        text = (completion.choices[0].message.content or "").strip()
-        return parse_model_response(task, text)
-    except Exception as exc:
-        print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        fallbacks = {
-            "priority-classify": {"classifications": {}},
-            "shortage-detect": {"shortage_items": []},
-            "optimize-allocation": {"allocations": []},
-        }
-        return fallbacks.get(task, {})
+
+        text = completion.choices[0].message.content or ""
+        return parse_model_response(text)
+
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -218,74 +127,61 @@ def get_model_action(client: OpenAI, task: str, observation: Dict[str, Any]) -> 
 def run_task(client: OpenAI, task: str) -> None:
     rewards: List[float] = []
     steps_taken = 0
+
     score = 0.0
     success = False
-    error_msg: Optional[str] = None
 
-    log_start(task=task, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task, BENCHMARK, MODEL_NAME)
 
     try:
-        # Reset environment
         reset_resp = env_reset(task)
         observation = reset_resp.get("observation", {})
         done = reset_resp.get("done", False)
 
-        for step in range(1, MAX_STEPS + 1):
-            if done:
-                break
+        step = 1
 
-            # Get action from model
-            payload = get_model_action(client, task, observation)
-            action_str = json.dumps(payload)
+        while not done and step <= MAX_STEPS:
 
-            # Step environment
-            try:
-                step_resp = env_step(task, payload)
-                observation = step_resp.get("observation", {})
-                reward = float(step_resp.get("reward", 0.0))
-                done = step_resp.get("done", True)
-                info = step_resp.get("info", {})
-                error_msg = None
-            except Exception as e:
-                reward = 0.0
-                done = True
-                error_msg = str(e)
-                info = {}
+            action = get_model_action(client, task, observation)
+
+            step_resp = env_step(task, action)
+
+            observation = step_resp.get("observation", {})
+            reward = float(step_resp.get("reward", 0.0))
+            done = step_resp.get("done", True)
+
+            error_msg = step_resp.get("info", {}).get("error", None)
 
             rewards.append(reward)
             steps_taken = step
 
-            log_step(step=step, action=action_str, reward=reward, done=done, error=error_msg)
+            log_step(step, json.dumps(action), reward, done, error_msg)
 
-            if done:
-                break
+            step += 1
 
-        score = rewards[-1] if rewards else 0.0
-        score = round(min(max(score, 0.0), 1.0), 3)
+        # ✅ FIXED SCORE (IMPORTANT)
+        score = sum(rewards) / len(rewards) if rewards else 0.0
+        score = max(0.0, min(score, 1.0))
+
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as exc:
-        print(f"[DEBUG] Episode error: {exc}", flush=True)
-        error_msg = str(exc)
+        print(f"[DEBUG] Error: {exc}", flush=True)
 
     finally:
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(success, steps_taken, score, rewards)
 
+
+# ---------------------------------------------------------------------------
+# Entry
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    tasks_to_run = os.getenv("MILSUPPLY_TASK", "")
-    if tasks_to_run == "all":
-        task_list = ["priority-classify", "shortage-detect", "optimize-allocation"]
-    elif tasks_to_run:
-        task_list = [tasks_to_run]
-    else:
-        task_list = ["priority-classify"]
+    task = os.getenv("MILSUPPLY_TASK", "priority-classify")
 
-    for task in task_list:
-        run_task(client, task)
-        print()  # blank line between tasks
+    run_task(client, task)
 
 
 if __name__ == "__main__":
