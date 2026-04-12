@@ -175,3 +175,18 @@ GRADERS = {
     "shortage-detect": grade_shortage_detect,
     "optimize-allocation": grade_optimize_allocation,
 }
+
+TASKS = [
+    {
+        "name": "priority-classify",
+        "grader": grade_priority_classify,
+    },
+    {
+        "name": "shortage-detect",
+        "grader": grade_shortage_detect,
+    },
+    {
+        "name": "optimize-allocation",
+        "grader": grade_optimize_allocation,
+    },
+]
