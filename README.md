@@ -2,11 +2,6 @@
 
 **Military Logistics & Supply Chain** — an OpenEnv environment where AI agents manage real-world defense supply operations.
 
-> 🚀 **Live Demo:** `https://RegeeHugging-milsupply-env.hf.space`  
-> Replace with your actual HuggingFace Space URL after deployment.
-
----
-
 ## Overview
 
 `milsupply-env` simulates the logistics challenges faced by military supply chain officers:
@@ -37,8 +32,6 @@ The agent receives a list of supply requests. Each request includes the item typ
 
 **Scoring:** `correct / total`, minus `0.2` per critical request misclassified as routine (a dangerous error).
 
----
-
 ### Task 2: `shortage-detect` (Medium)
 
 The agent receives current inventory levels and pending unit requests. It must identify items that are **critically short** — meaning all three are true:
@@ -52,8 +45,6 @@ The agent receives current inventory levels and pending unit requests. It must i
 ```
 
 **Scoring:** F1 score against the ground-truth shortage set (balances precision and recall).
-
----
 
 ### Task 3: `optimize-allocation` (Hard)
 
@@ -115,10 +106,10 @@ Task-specific JSON payload sent to `POST /step`:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET`  | `/health` | Health check |
-| `GET`  | `/tasks`  | List available tasks with difficulty and score range |
-| `GET`  | `/state`  | Current environment state (active task, episode done, task internals) |
+| `GET`  | `/tasks`  | List available tasks |
 | `POST` | `/reset`  | Start new episode `{"task": "priority-classify"}` |
 | `POST` | `/step`   | Take action `{"task": "...", "payload": {...}}` |
+| `GET`  | `/state`  | Current environment state |
 
 ---
 
@@ -133,7 +124,11 @@ Task-specific JSON payload sent to `POST /step`:
 ### Run with Docker
 
 ```bash
+# Build
+cd server/
 docker build -t milsupply-env .
+
+# Run
 docker run -p 7860:7860 milsupply-env
 ```
 
@@ -147,40 +142,16 @@ python main.py
 
 Server will be available at `http://localhost:7860`.
 
-### Use the deployed HuggingFace Space directly
-
-Once deployed, you can interact with the environment at:
-
-```
-https://RegeeHugging-milsupply-env.hf.space
-```
-
-Example:
-```bash
-# Health check
-curl https://RegeeHugging-milsupply-env.hf.space/health
-
-# Reset to a task
-curl -X POST https://RegeeHugging-milsupply-env.hf.space/reset \
-  -H "Content-Type: application/json" \
-  -d '{"task": "priority-classify"}'
-
-# Submit action
-curl -X POST https://RegeeHugging-milsupply-env.hf.space/step \
-  -H "Content-Type: application/json" \
-  -d '{"task": "priority-classify", "payload": {"classifications": {"REQ-001": "critical"}}}'
-```
-
 ### Run inference baseline
 
 ```bash
+# Install inference dependencies
 pip install openai requests
 
+# Set environment variables
 export API_BASE_URL=https://router.huggingface.co/v1
 export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
 export HF_TOKEN=hf_your_token_here
-
-# Point to local server or deployed Space
 export MILSUPPLY_ENV_URL=http://localhost:7860
 
 # Run a single task
@@ -196,7 +167,7 @@ python inference.py
 
 ## Reward Design
 
-The reward function provides **partial credit at every step**, not just binary success/failure:
+The reward function is designed to provide **partial credit at every step**, not just binary success/failure:
 
 - **priority-classify**: Fraction of correctly classified requests. Critical-to-routine misclassification adds a `−0.2` penalty per error (simulating the real cost of deprioritizing life-safety items).
 - **shortage-detect**: F1 score ensures the agent is penalized for both false alarms (precision) and missed shortages (recall).
@@ -208,13 +179,13 @@ All scores are normalized to `[0.0, 1.0]`.
 
 ## Baseline Scores
 
-> **Note:** Scenarios are selected randomly per episode. Scores below are approximate averages over multiple runs.
-
-| Task | Model | Approximate Score |
+| Task | Model | Score |
 |------|-------|-------|
 | `priority-classify` | Qwen2.5-72B-Instruct | ~0.80 |
 | `shortage-detect`   | Qwen2.5-72B-Instruct | ~0.70 |
 | `optimize-allocation` | Qwen2.5-72B-Instruct | ~0.55 |
+
+*(Scores may vary by scenario seed)*
 
 ---
 
@@ -222,19 +193,17 @@ All scores are normalized to `[0.0, 1.0]`.
 
 ```
 milsupply-env/
-├── Dockerfile                         ← HuggingFace Space entry point
 ├── server/
-│   ├── main.py                        ← FastAPI OpenEnv server
-│   ├── models.py                      ← Pydantic typed models
-│   ├── app.py                         ← App entry point
+│   ├── main.py                    # FastAPI OpenEnv server
+│   ├── models.py                  # Pydantic typed models
 │   ├── requirements.txt
+│   ├── Dockerfile
 │   └── tasks/
-│       ├── __init__.py
-│       ├── priority_classify.py       ← Easy task + grader
-│       ├── shortage_detect.py         ← Medium task + grader
-│       └── optimize_allocation.py     ← Hard task + grader
-├── inference.py                       ← Baseline inference script
-├── openenv.yaml                       ← OpenEnv metadata
+│       ├── priority_classify.py   # Easy task + grader
+│       ├── shortage_detect.py     # Medium task + grader
+│       └── optimize_allocation.py # Hard task + grader
+├── openenv.yaml                   # OpenEnv metadata
+├── inference.py                   # Baseline inference script
 └── README.md
 ```
 

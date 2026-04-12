@@ -5,8 +5,10 @@ WORKDIR /app
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server/ .
+COPY models.py .
+COPY server/ ./server/
+COPY __init__.py .
 
 EXPOSE 7860
 
-CMD ["python", "main.py"]
+CMD ["python", "server/app.py"]

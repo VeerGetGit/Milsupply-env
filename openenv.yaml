@@ -16,9 +16,7 @@ tags:
   - defense
   - resource-allocation
 
-# TODO: Replace with your actual HuggingFace Space URL
-# Format: https://<your-hf-username>-milsupply-env.hf.space
-env_url: "https://RegeeHugging-milsupply-env.hf.space"
+env_url: "https://regeehugging-milsupply-env.hf.space"
 
 tasks:
   - name: priority-classify
@@ -63,19 +61,19 @@ observation_space:
 action_space:
   type: object
   description: >
-    Task-specific JSON payload:
-    - priority-classify: {classifications: {request_id: priority_label}}
-    - shortage-detect: {shortage_items: [item_name, ...]}
-    - optimize-allocation: {allocations: [{unit, item, quantity_allocated}]}
+    Task-specific JSON payload via MilSupplyAction model:
+    - priority-classify: {task, classifications: {request_id: priority_label}}
+    - shortage-detect: {task, shortage_items: [item_name, ...]}
+    - optimize-allocation: {task, allocations: [{unit, item, quantity_allocated}]}
 
 reward:
   type: float
   range: [0.0, 1.0]
   description: >
-    Partial credit reward based on task-specific grader:
-    - priority-classify: fraction correct, minus penalty for critical to routine errors
+    Partial credit reward based on task-specific Rubric grader:
+    - priority-classify: fraction correct, minus penalty for critical-to-routine errors
     - shortage-detect: F1 score against ground truth shortage set
-    - optimize-allocation: weighted readiness gain across units (halved if over-allocated)
+    - optimize-allocation: weighted readiness gain (halved if over-allocated)
 
 endpoints:
   reset: POST /reset
