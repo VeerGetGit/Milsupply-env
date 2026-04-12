@@ -1,19 +1,117 @@
 """
 milsupply-env — Military Logistics & Supply Chain
 ===================================================
-Stateless design: ground truth is re-derived from the action's task
-using a fixed seed stored in a module-level cache keyed by task.
+3 tasks with graders passed as rubric to Environment base class.
+Scores strictly between 0.001 and 0.999.
 """
 
 import random
 import sys
-from typing import Any, Dict, List
+from collections import defaultdict
+from typing import Any, Dict, List, Set
 
 sys.path.insert(0, "/app")
 
 from openenv.core.env_server import Environment
+from openenv.core.rubrics import Rubric
 from models import MilSupplyAction, MilSupplyObservation, MilSupplyState
-from task_definitions import GRADERS
+
+
+# ===========================================================================
+# SCORE CLAMPING
+# ===========================================================================
+
+def clamp(score: float) -> float:
+    return round(max(0.001, min(float(score), 0.999)), 4)
+
+
+# ===========================================================================
+# RUBRIC CLASSES — one per task
+# ===========================================================================
+
+class PriorityClassifyRubric(Rubric):
+    def forward(self, action: Any, observation: Any) -> float:
+        ground_truth = getattr(observation, "info", {}).get("_ground_truth", {})
+        classifications = getattr(action, "classifications", {}) or {}
+        total = len(ground_truth)
+        if total == 0:
+            return 0.001
+        correct = 0
+        penalty = 0.0
+        for req_id, truth in ground_truth.items():
+            predicted = classifications.get(req_id, "").lower().strip()
+            if predicted == truth:
+                correct += 1
+            elif truth == "critical" and predicted == "routine":
+                penalty += 0.2
+        return clamp(max(0.0, (correct / total) - penalty))
+
+
+class ShortageDetectRubric(Rubric):
+    def forward(self, action: Any, observation: Any) -> float:
+        truth = set(getattr(observation, "info", {}).get("_ground_truth_shortages", []))
+        predicted = set(getattr(action, "shortage_items", None) or [])
+        if not truth:
+            return 0.999 if not predicted else 0.001
+        if not predicted:
+            return 0.001
+        tp = len(predicted & truth)
+        precision = tp / len(predicted)
+        recall = tp / len(truth)
+        if precision + recall == 0:
+            return 0.001
+        return clamp(2 * precision * recall / (precision + recall))
+
+
+class OptimizeAllocationRubric(Rubric):
+    def forward(self, action: Any, observation: Any) -> float:
+        allocations = getattr(action, "allocations", None) or []
+        available = getattr(observation, "available_stock", {}) or {}
+        units_data = getattr(observation, "info", {}).get("_units_with_needed", [])
+
+        alloc_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        for entry in allocations:
+            unit = entry.get("unit", "")
+            item = entry.get("item", "")
+            qty = int(entry.get("quantity_allocated", 0))
+            if unit and item and qty > 0:
+                alloc_map[unit][item] += qty
+
+        used: Dict[str, int] = defaultdict(int)
+        for unit_allocs in alloc_map.values():
+            for item, qty in unit_allocs.items():
+                used[item] += qty
+        over_allocated = any(used[item] > available.get(item, 0) for item in used)
+
+        total_personnel = sum(u.get("personnel", 0) for u in units_data)
+        if total_personnel == 0:
+            return 0.001
+
+        weighted_score = 0.0
+        for u in units_data:
+            unit_name = u["unit"]
+            needed = u.get("_needed_qty", {})
+            if not needed:
+                continue
+            item_scores = [
+                min(alloc_map[unit_name].get(item, 0) / qty_needed, 1.0)
+                for item, qty_needed in needed.items() if qty_needed > 0
+            ]
+            unit_gain = sum(item_scores) / len(item_scores) if item_scores else 0.0
+            weighted_score += unit_gain * (u["personnel"] / total_personnel)
+
+        score = min(max(weighted_score, 0.0), 1.0)
+        if over_allocated:
+            score *= 0.5
+        return clamp(score)
+
+
+# Instantiate rubrics
+RUBRICS = {
+    "priority-classify": PriorityClassifyRubric(),
+    "shortage-detect": ShortageDetectRubric(),
+    "optimize-allocation": OptimizeAllocationRubric(),
+}
 
 
 # ===========================================================================
@@ -51,13 +149,11 @@ SHORTAGE_SCENARIOS = [
             {"item": "5.56mm ammunition", "quantity_available": 500, "reorder_threshold": 2000, "days_until_resupply": 7},
             {"item": "MRE rations", "quantity_available": 3000, "reorder_threshold": 1000, "days_until_resupply": 2},
             {"item": "Medical bandages", "quantity_available": 80, "reorder_threshold": 200, "days_until_resupply": 5},
-            {"item": "Diesel fuel (liters)", "quantity_available": 5000, "reorder_threshold": 3000, "days_until_resupply": 1},
             {"item": "Night vision batteries", "quantity_available": 20, "reorder_threshold": 100, "days_until_resupply": 6},
             {"item": "Morphine auto-injectors", "quantity_available": 10, "reorder_threshold": 50, "days_until_resupply": 8},
         ],
         "pending_requests": [
             {"request_id": "R-201", "unit": "1st Infantry", "item": "5.56mm ammunition", "quantity_requested": 1000, "urgency_stated": "critical", "location": "Grid 1122", "mission_criticality": "combat"},
-            {"request_id": "R-202", "unit": "Support Base", "item": "MRE rations", "quantity_requested": 500, "urgency_stated": "routine", "location": "Base", "mission_criticality": "support"},
             {"request_id": "R-203", "unit": "Medical Corps", "item": "Medical bandages", "quantity_requested": 300, "urgency_stated": "high", "location": "Aid Stn", "mission_criticality": "combat"},
             {"request_id": "R-204", "unit": "Recon Team", "item": "Night vision batteries", "quantity_requested": 60, "urgency_stated": "high", "location": "Grid 3344", "mission_criticality": "combat"},
             {"request_id": "R-206", "unit": "Combat Medics", "item": "Morphine auto-injectors", "quantity_requested": 40, "urgency_stated": "critical", "location": "Grid 1122", "mission_criticality": "combat"},
@@ -68,7 +164,6 @@ SHORTAGE_SCENARIOS = [
         "context": "FOB Eagle is supporting a rapid advance. Inventory drawn down heavily. Flag items at critical shortage.",
         "inventory": [
             {"item": "Tank rounds (120mm)", "quantity_available": 15, "reorder_threshold": 80, "days_until_resupply": 5},
-            {"item": "Engineer tape", "quantity_available": 200, "reorder_threshold": 50, "days_until_resupply": 2},
             {"item": "IV saline bags", "quantity_available": 30, "reorder_threshold": 100, "days_until_resupply": 9},
             {"item": "Smoke grenades", "quantity_available": 10, "reorder_threshold": 50, "days_until_resupply": 6},
             {"item": "GPS handheld units", "quantity_available": 2, "reorder_threshold": 10, "days_until_resupply": 12},
@@ -101,19 +196,6 @@ ALLOCATION_SCENARIOS = [
     },
 ]
 
-# Module-level cache: stores last scenario index per task
-# This works because openenv-core uses a single process with thread pool
-_SCENARIO_CACHE: Dict[str, int] = {}
-
-
-def _get_scenario_index(task: str, scenarios: list) -> int:
-    idx = _SCENARIO_CACHE.get(task, 0)
-    return idx % len(scenarios)
-
-
-def _set_scenario_index(task: str, idx: int):
-    _SCENARIO_CACHE[task] = idx
-
 
 # ===========================================================================
 # MAIN ENVIRONMENT CLASS
@@ -122,26 +204,21 @@ def _set_scenario_index(task: str, idx: int):
 class MilSupplyEnvironment(Environment):
     """
     Military Logistics & Supply Chain Environment.
-    Uses module-level cache to share state across thread pool workers.
+    3 tasks: priority-classify (easy), shortage-detect (medium), optimize-allocation (hard).
+    Each task has a Rubric grader returning scores strictly between 0.001 and 0.999.
     """
-    
-    tasks = {
-    "priority-classify": {
-        "grader": GRADERS["priority-classify"],
-    },
-    "shortage-detect": {
-        "grader": GRADERS["shortage-detect"],
-    },
-    "optimize-allocation": {
-        "grader": GRADERS["optimize-allocation"],
-    },
-    }
-    
+
+    # Rubrics attached as class attributes for validator detection
+    priority_rubric: Rubric = PriorityClassifyRubric()
+    shortage_rubric: Rubric = ShortageDetectRubric()
+    allocation_rubric: Rubric = OptimizeAllocationRubric()
+
     def __init__(self):
-        super().__init__()
+        # Pass rubric to base class
+        super().__init__(rubric=PriorityClassifyRubric())
         self._state = MilSupplyState()
         self._current_observation: MilSupplyObservation = None
-
+        self._rubrics = RUBRICS
 
     def reset(self, task: str = "priority-classify", seed: int = None) -> MilSupplyObservation:
         if seed is not None:
@@ -159,55 +236,25 @@ class MilSupplyEnvironment(Environment):
         return obs
 
     def step(self, action: MilSupplyAction) -> MilSupplyObservation:
-        task = action.task if hasattr(action, "task") and action.task else self._state.active_task
-        action_dict = action.dict() if hasattr(action, "dict") else {}
-
-        # Stateless fallback: re-derive ground truth from cached scenario index
-        if self._current_observation is None:
-            self.reset(task)
-
-        if task == "shortage-detect":
-            idx = _get_scenario_index(task, SHORTAGE_SCENARIOS)
-            scenario = SHORTAGE_SCENARIOS[idx]
-            ground_truth = scenario["_ground_truth_shortages"]
-            reward = GRADERS["shortage-detect"](action_dict, ground_truth)
-        elif task == "optimize-allocation":
-            idx = _get_scenario_index(task, ALLOCATION_SCENARIOS)
-            scenario = ALLOCATION_SCENARIOS[idx]
-            reward = GRADERS["optimize-allocation"](
-                action_dict,
-                scenario["available_stock"],
-                scenario["units"],
-            )
-        else:
-            idx = _get_scenario_index(task, PRIORITY_SCENARIOS)
-            scenario = PRIORITY_SCENARIOS[idx]
-            ground_truth = {r["request_id"]: r["_ground_truth"] for r in scenario["requests"]}
-            reward = GRADERS["priority-classify"](action_dict, ground_truth)
+        task = getattr(action, "task", None) or self._state.active_task
+        rubric = self._rubrics.get(task, self._rubrics["priority-classify"])
+        reward = rubric(action, self._current_observation)
 
         self._state.step_count += 1
         self._state.episode_done = True
         self._state.last_reward = reward
 
-        context = self._current_observation.context if self._current_observation else ""
-        supply_requests = self._current_observation.supply_requests if self._current_observation else None
-        inventory = self._current_observation.inventory if self._current_observation else None
-        pending_requests = self._current_observation.pending_requests if self._current_observation else None
-        available_stock = self._current_observation.available_stock if self._current_observation else None
-        units = self._current_observation.units if self._current_observation else None
-        info = self._current_observation.info if self._current_observation else {}
-
         obs = MilSupplyObservation(
             task=task,
-            context=context,
+            context=self._current_observation.context,
             reward=reward,
             done=True,
-            info={**info, "reward": reward},
-            supply_requests=supply_requests,
-            inventory=inventory,
-            pending_requests=pending_requests,
-            available_stock=available_stock,
-            units=units,
+            info={**self._current_observation.info, "reward": reward},
+            supply_requests=self._current_observation.supply_requests,
+            inventory=self._current_observation.inventory,
+            pending_requests=self._current_observation.pending_requests,
+            available_stock=self._current_observation.available_stock,
+            units=self._current_observation.units,
         )
         self._current_observation = obs
         return obs
@@ -217,9 +264,7 @@ class MilSupplyEnvironment(Environment):
         return self._state
 
     def _reset_priority_classify(self) -> MilSupplyObservation:
-        idx = random.randint(0, len(PRIORITY_SCENARIOS) - 1)
-        _set_scenario_index("priority-classify", idx)
-        scenario = PRIORITY_SCENARIOS[idx]
+        scenario = random.choice(PRIORITY_SCENARIOS)
         ground_truth = {r["request_id"]: r["_ground_truth"] for r in scenario["requests"]}
         clean_requests = [{k: v for k, v in r.items() if not k.startswith("_")} for r in scenario["requests"]]
         return MilSupplyObservation(
@@ -230,9 +275,7 @@ class MilSupplyEnvironment(Environment):
         )
 
     def _reset_shortage_detect(self) -> MilSupplyObservation:
-        idx = random.randint(0, len(SHORTAGE_SCENARIOS) - 1)
-        _set_scenario_index("shortage-detect", idx)
-        scenario = SHORTAGE_SCENARIOS[idx]
+        scenario = random.choice(SHORTAGE_SCENARIOS)
         return MilSupplyObservation(
             task="shortage-detect",
             context=scenario["context"],
@@ -242,9 +285,7 @@ class MilSupplyEnvironment(Environment):
         )
 
     def _reset_optimize_allocation(self) -> MilSupplyObservation:
-        idx = random.randint(0, len(ALLOCATION_SCENARIOS) - 1)
-        _set_scenario_index("optimize-allocation", idx)
-        scenario = ALLOCATION_SCENARIOS[idx]
+        scenario = random.choice(ALLOCATION_SCENARIOS)
         clean_units = [{k: v for k, v in u.items() if not k.startswith("_")} for u in scenario["units"]]
         return MilSupplyObservation(
             task="optimize-allocation",
