@@ -1,10 +1,10 @@
 import uvicorn
-from openenv_core.env_server import create_app
+from openenv.core.env_server import create_app
 from models import MilSupplyAction, MilSupplyObservation
 from environment import MilSupplyEnvironment
 
-env = MilSupplyEnvironment()
-app = create_app(env, MilSupplyAction, MilSupplyObservation)
+# Pass the CLASS not an instance
+app = create_app(MilSupplyEnvironment, MilSupplyAction, MilSupplyObservation)
 
 
 def main():

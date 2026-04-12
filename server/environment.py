@@ -6,9 +6,9 @@ Uses OpenEnv Environment base class with graders for all 3 tasks.
 
 import random
 from collections import defaultdict
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set
 
-from openenv_core.env_server import Environment
+from openenv.core.env_server import Environment
 from models import MilSupplyAction, MilSupplyObservation, MilSupplyState
 
 
@@ -99,7 +99,7 @@ ALLOCATION_SCENARIOS = [
 
 
 # ===========================================================================
-# GRADER FUNCTIONS (replaces Rubric classes)
+# GRADER FUNCTIONS
 # ===========================================================================
 
 def grade_priority_classify(action: MilSupplyAction, observation: MilSupplyObservation) -> float:
@@ -116,8 +116,7 @@ def grade_priority_classify(action: MilSupplyAction, observation: MilSupplyObser
             correct += 1
         elif truth == "critical" and predicted == "routine":
             penalty += 0.2
-    score = max(0.0, (correct / total) - penalty)
-    return round(min(score, 1.0), 4)
+    return round(min(max((correct / total) - penalty, 0.0), 1.0), 4)
 
 
 def grade_shortage_detect(action: MilSupplyAction, observation: MilSupplyObservation) -> float:
@@ -164,18 +163,12 @@ def grade_optimize_allocation(action: MilSupplyAction, observation: MilSupplyObs
         needed: Dict[str, int] = u.get("_needed_qty", {})
         if not needed:
             continue
-        item_scores = []
-        for item, qty_needed in needed.items():
-            qty_given = alloc_map[unit_name].get(item, 0)
-            item_scores.append(min(qty_given / qty_needed, 1.0) if qty_needed > 0 else 0.0)
+        item_scores = [min(alloc_map[unit_name].get(item, 0) / qty_needed, 1.0) for item, qty_needed in needed.items() if qty_needed > 0]
         unit_gain = sum(item_scores) / len(item_scores) if item_scores else 0.0
-        weight = u["personnel"] / total_personnel
-        weighted_score += unit_gain * weight
+        weighted_score += unit_gain * (u["personnel"] / total_personnel)
 
     score = round(min(max(weighted_score, 0.0), 1.0), 4)
-    if over_allocated:
-        score = round(score * 0.5, 4)
-    return score
+    return round(score * 0.5, 4) if over_allocated else score
 
 
 GRADERS = {
@@ -192,7 +185,7 @@ GRADERS = {
 class MilSupplyEnvironment(Environment):
     """
     Military Logistics & Supply Chain Environment.
-    Implements 3 tasks with graders: priority-classify, shortage-detect, optimize-allocation.
+    3 tasks with graders: priority-classify, shortage-detect, optimize-allocation.
     """
 
     def __init__(self):
@@ -203,12 +196,9 @@ class MilSupplyEnvironment(Environment):
     def reset(self, task: str = "priority-classify", seed: int = None) -> MilSupplyObservation:
         if seed is not None:
             random.seed(seed)
-
         self._state = MilSupplyState(active_task=task)
 
-        if task == "priority-classify":
-            obs = self._reset_priority_classify()
-        elif task == "shortage-detect":
+        if task == "shortage-detect":
             obs = self._reset_shortage_detect()
         elif task == "optimize-allocation":
             obs = self._reset_optimize_allocation()
