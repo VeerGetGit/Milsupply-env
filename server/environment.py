@@ -22,7 +22,6 @@ from models import MilSupplyAction, MilSupplyObservation, MilSupplyState
 # ===========================================================================
 
 def clamp(score: float) -> float:
-    """Always returns strictly between 0.001 and 0.999."""
     try:
         s = float(score)
     except Exception:
@@ -223,18 +222,13 @@ ALLOCATION_SCENARIOS = [
 # ===========================================================================
 
 class MilSupplyEnvironment(Environment):
-    """
-    Military Logistics & Supply Chain — 3 tasks with Rubric graders.
-    priority-classify (easy), shortage-detect (medium), optimize-allocation (hard).
-    """
 
-    # Register rubrics as class attributes AND pass to base class
     priority_rubric = PriorityClassifyRubric()
     shortage_rubric = ShortageDetectRubric()
     allocation_rubric = OptimizeAllocationRubric()
 
     def __init__(self):
-        super().__init__(rubric=PriorityClassifyRubric())
+        super().__init__()
         self._state = MilSupplyState()
         self._current_observation: MilSupplyObservation = None
         self._rubrics = {
@@ -261,9 +255,13 @@ class MilSupplyEnvironment(Environment):
     def step(self, action: MilSupplyAction) -> MilSupplyObservation:
         try:
             task = getattr(action, "task", None) or self._state.active_task
+
+            # Stateless server fix: rebuild observation if missing
+            if self._current_observation is None:
+                self.reset(task)
+
             rubric = self._rubrics.get(task, self.priority_rubric)
             reward = rubric(action, self._current_observation)
-            # Final safety net — always strictly between 0.001 and 0.999
             reward = clamp(reward)
         except Exception:
             reward = 0.001
