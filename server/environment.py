@@ -1,8 +1,8 @@
 """
 milsupply-env — Military Logistics & Supply Chain
 ===================================================
-3 tasks with graders passed as rubric to Environment base class.
-Scores strictly between 0.001 and 0.999.
+3 tasks with Rubric graders.
+ALL rewards are strictly between 0.001 and 0.999 — never 0.0 or 1.0.
 """
 
 import random
@@ -18,100 +18,121 @@ from models import MilSupplyAction, MilSupplyObservation, MilSupplyState
 
 
 # ===========================================================================
-# SCORE CLAMPING
+# SCORE CLAMPING — STRICTLY between 0.001 and 0.999
 # ===========================================================================
 
 def clamp(score: float) -> float:
-    return round(max(0.001, min(float(score), 0.999)), 4)
+    """Always returns strictly between 0.001 and 0.999."""
+    try:
+        s = float(score)
+    except Exception:
+        return 0.001
+    if s <= 0.0:
+        return 0.001
+    if s >= 1.0:
+        return 0.999
+    return round(s, 4)
 
 
 # ===========================================================================
-# RUBRIC CLASSES — one per task
+# RUBRIC GRADERS
 # ===========================================================================
 
 class PriorityClassifyRubric(Rubric):
     def forward(self, action: Any, observation: Any) -> float:
-        ground_truth = getattr(observation, "info", {}).get("_ground_truth", {})
-        classifications = getattr(action, "classifications", {}) or {}
-        total = len(ground_truth)
-        if total == 0:
+        try:
+            info = getattr(observation, "info", {}) or {}
+            ground_truth = info.get("_ground_truth", {})
+            classifications = getattr(action, "classifications", None) or {}
+            total = len(ground_truth)
+            if total == 0:
+                return 0.001
+            correct = 0
+            penalty = 0.0
+            for req_id, truth in ground_truth.items():
+                predicted = str(classifications.get(req_id, "")).lower().strip()
+                if predicted == truth:
+                    correct += 1
+                elif truth == "critical" and predicted == "routine":
+                    penalty += 0.2
+            raw = max(0.0, (correct / total) - penalty)
+            return clamp(raw)
+        except Exception:
             return 0.001
-        correct = 0
-        penalty = 0.0
-        for req_id, truth in ground_truth.items():
-            predicted = classifications.get(req_id, "").lower().strip()
-            if predicted == truth:
-                correct += 1
-            elif truth == "critical" and predicted == "routine":
-                penalty += 0.2
-        return clamp(max(0.0, (correct / total) - penalty))
 
 
 class ShortageDetectRubric(Rubric):
     def forward(self, action: Any, observation: Any) -> float:
-        truth = set(getattr(observation, "info", {}).get("_ground_truth_shortages", []))
-        predicted = set(getattr(action, "shortage_items", None) or [])
-        if not truth:
-            return 0.999 if not predicted else 0.001
-        if not predicted:
+        try:
+            info = getattr(observation, "info", {}) or {}
+            truth: Set[str] = set(info.get("_ground_truth_shortages", []))
+            raw_items = getattr(action, "shortage_items", None) or []
+            predicted: Set[str] = set(raw_items)
+            if not truth:
+                return 0.001
+            if not predicted:
+                return 0.001
+            tp = len(predicted & truth)
+            if tp == 0:
+                return 0.001
+            precision = tp / len(predicted)
+            recall = tp / len(truth)
+            if precision + recall == 0:
+                return 0.001
+            f1 = 2 * precision * recall / (precision + recall)
+            return clamp(f1)
+        except Exception:
             return 0.001
-        tp = len(predicted & truth)
-        precision = tp / len(predicted)
-        recall = tp / len(truth)
-        if precision + recall == 0:
-            return 0.001
-        return clamp(2 * precision * recall / (precision + recall))
 
 
 class OptimizeAllocationRubric(Rubric):
     def forward(self, action: Any, observation: Any) -> float:
-        allocations = getattr(action, "allocations", None) or []
-        available = getattr(observation, "available_stock", {}) or {}
-        units_data = getattr(observation, "info", {}).get("_units_with_needed", [])
+        try:
+            info = getattr(observation, "info", {}) or {}
+            allocations = getattr(action, "allocations", None) or []
+            available = getattr(observation, "available_stock", {}) or {}
+            units_data = info.get("_units_with_needed", [])
 
-        alloc_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for entry in allocations:
-            unit = entry.get("unit", "")
-            item = entry.get("item", "")
-            qty = int(entry.get("quantity_allocated", 0))
-            if unit and item and qty > 0:
-                alloc_map[unit][item] += qty
+            if not allocations or not units_data:
+                return 0.001
 
-        used: Dict[str, int] = defaultdict(int)
-        for unit_allocs in alloc_map.values():
-            for item, qty in unit_allocs.items():
-                used[item] += qty
-        over_allocated = any(used[item] > available.get(item, 0) for item in used)
+            alloc_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+            for entry in allocations:
+                unit = entry.get("unit", "")
+                item = entry.get("item", "")
+                qty = int(entry.get("quantity_allocated", 0))
+                if unit and item and qty > 0:
+                    alloc_map[unit][item] += qty
 
-        total_personnel = sum(u.get("personnel", 0) for u in units_data)
-        if total_personnel == 0:
+            used: Dict[str, int] = defaultdict(int)
+            for unit_allocs in alloc_map.values():
+                for item, qty in unit_allocs.items():
+                    used[item] += qty
+            over_allocated = any(used[item] > available.get(item, 0) for item in used)
+
+            total_personnel = sum(u.get("personnel", 0) for u in units_data)
+            if total_personnel == 0:
+                return 0.001
+
+            weighted_score = 0.0
+            for u in units_data:
+                unit_name = u["unit"]
+                needed = u.get("_needed_qty", {})
+                if not needed:
+                    continue
+                item_scores = []
+                for item, qty_needed in needed.items():
+                    if qty_needed > 0:
+                        item_scores.append(min(alloc_map[unit_name].get(item, 0) / qty_needed, 1.0))
+                unit_gain = sum(item_scores) / len(item_scores) if item_scores else 0.0
+                weighted_score += unit_gain * (u["personnel"] / total_personnel)
+
+            score = min(max(weighted_score, 0.0), 1.0)
+            if over_allocated:
+                score *= 0.5
+            return clamp(score)
+        except Exception:
             return 0.001
-
-        weighted_score = 0.0
-        for u in units_data:
-            unit_name = u["unit"]
-            needed = u.get("_needed_qty", {})
-            if not needed:
-                continue
-            item_scores = [
-                min(alloc_map[unit_name].get(item, 0) / qty_needed, 1.0)
-                for item, qty_needed in needed.items() if qty_needed > 0
-            ]
-            unit_gain = sum(item_scores) / len(item_scores) if item_scores else 0.0
-            weighted_score += unit_gain * (u["personnel"] / total_personnel)
-
-        score = min(max(weighted_score, 0.0), 1.0)
-        if over_allocated:
-            score *= 0.5
-        return clamp(score)
-
-
-# Instantiate rubrics
-RUBRICS = {
-    "priority-classify": PriorityClassifyRubric(),
-    "shortage-detect": ShortageDetectRubric(),
-    "optimize-allocation": OptimizeAllocationRubric(),
-}
 
 
 # ===========================================================================
@@ -203,22 +224,24 @@ ALLOCATION_SCENARIOS = [
 
 class MilSupplyEnvironment(Environment):
     """
-    Military Logistics & Supply Chain Environment.
-    3 tasks: priority-classify (easy), shortage-detect (medium), optimize-allocation (hard).
-    Each task has a Rubric grader returning scores strictly between 0.001 and 0.999.
+    Military Logistics & Supply Chain — 3 tasks with Rubric graders.
+    priority-classify (easy), shortage-detect (medium), optimize-allocation (hard).
     """
 
-    # Rubrics attached as class attributes for validator detection
-    priority_rubric: Rubric = PriorityClassifyRubric()
-    shortage_rubric: Rubric = ShortageDetectRubric()
-    allocation_rubric: Rubric = OptimizeAllocationRubric()
+    # Register rubrics as class attributes AND pass to base class
+    priority_rubric = PriorityClassifyRubric()
+    shortage_rubric = ShortageDetectRubric()
+    allocation_rubric = OptimizeAllocationRubric()
 
     def __init__(self):
-        # Pass rubric to base class
         super().__init__(rubric=PriorityClassifyRubric())
         self._state = MilSupplyState()
         self._current_observation: MilSupplyObservation = None
-        self._rubrics = RUBRICS
+        self._rubrics = {
+            "priority-classify": self.priority_rubric,
+            "shortage-detect": self.shortage_rubric,
+            "optimize-allocation": self.allocation_rubric,
+        }
 
     def reset(self, task: str = "priority-classify", seed: int = None) -> MilSupplyObservation:
         if seed is not None:
@@ -236,25 +259,30 @@ class MilSupplyEnvironment(Environment):
         return obs
 
     def step(self, action: MilSupplyAction) -> MilSupplyObservation:
-        task = getattr(action, "task", None) or self._state.active_task
-        rubric = self._rubrics.get(task, self._rubrics["priority-classify"])
-        reward = rubric(action, self._current_observation)
+        try:
+            task = getattr(action, "task", None) or self._state.active_task
+            rubric = self._rubrics.get(task, self.priority_rubric)
+            reward = rubric(action, self._current_observation)
+            # Final safety net — always strictly between 0.001 and 0.999
+            reward = clamp(reward)
+        except Exception:
+            reward = 0.001
 
         self._state.step_count += 1
         self._state.episode_done = True
         self._state.last_reward = reward
 
         obs = MilSupplyObservation(
-            task=task,
-            context=self._current_observation.context,
+            task=getattr(action, "task", self._state.active_task),
+            context=self._current_observation.context if self._current_observation else "Military logistics operation",
             reward=reward,
             done=True,
-            info={**self._current_observation.info, "reward": reward},
-            supply_requests=self._current_observation.supply_requests,
-            inventory=self._current_observation.inventory,
-            pending_requests=self._current_observation.pending_requests,
-            available_stock=self._current_observation.available_stock,
-            units=self._current_observation.units,
+            info={**(self._current_observation.info if self._current_observation else {}), "reward": reward},
+            supply_requests=self._current_observation.supply_requests if self._current_observation else None,
+            inventory=self._current_observation.inventory if self._current_observation else None,
+            pending_requests=self._current_observation.pending_requests if self._current_observation else None,
+            available_stock=self._current_observation.available_stock if self._current_observation else None,
+            units=self._current_observation.units if self._current_observation else None,
         )
         self._current_observation = obs
         return obs
