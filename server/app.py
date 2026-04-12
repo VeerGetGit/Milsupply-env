@@ -39,6 +39,27 @@ def list_tasks():
         ]
     }
 
+@app.post("/grader")
+def grader(payload: dict):
+    task = payload.get("task", "priority-classify")
+    action = payload.get("action", {})
+    observation = payload.get("observation", {})
+    
+    from task_definitions import grade_priority_classify, grade_shortage_detect, grade_optimize_allocation
+    
+    if task == "shortage-detect":
+        ground_truth = observation.get("info", {}).get("_ground_truth_shortages", [])
+        score = grade_shortage_detect(action, ground_truth)
+    elif task == "optimize-allocation":
+        available_stock = observation.get("available_stock", {})
+        units = observation.get("info", {}).get("_units_with_needed", [])
+        score = grade_optimize_allocation(action, available_stock, units)
+    else:
+        ground_truth = observation.get("info", {}).get("_ground_truth", {})
+        score = grade_priority_classify(action, ground_truth)
+    
+    return {"score": score, "task": task}
+
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=7860)
