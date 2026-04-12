@@ -6,8 +6,10 @@ COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY models.py .
-COPY server/ ./server/
 COPY __init__.py .
+COPY server/ ./server/
+
+ENV PYTHONPATH=/app
 
 EXPOSE 7860
 
