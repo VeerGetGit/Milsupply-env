@@ -1,115 +1,15 @@
 """
 milsupply-env — Military Logistics & Supply Chain
 ===================================================
-Uses OpenEnv Environment base class with Rubric graders for all 3 tasks.
+Uses OpenEnv Environment base class with graders for all 3 tasks.
 """
 
 import random
-import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Set, Tuple
 
-from openenv.core.env_server import Environment
-from openenv.core.rubrics import Rubric
-
+from openenv_core.env_server import Environment
 from models import MilSupplyAction, MilSupplyObservation, MilSupplyState
-
-
-# ===========================================================================
-# RUBRIC GRADERS (one per task)
-# ===========================================================================
-
-class PriorityClassifyRubric(Rubric):
-    """Grader for priority-classify task."""
-
-    def forward(self, action: MilSupplyAction, observation: MilSupplyObservation) -> float:
-        ground_truth: Dict[str, str] = observation.info.get("_ground_truth", {})
-        classifications: Dict[str, str] = action.classifications or {}
-
-        total = len(ground_truth)
-        if total == 0:
-            return 0.0
-
-        correct = 0
-        penalty = 0.0
-        for req_id, truth in ground_truth.items():
-            predicted = classifications.get(req_id, "").lower().strip()
-            if predicted == truth:
-                correct += 1
-            elif truth == "critical" and predicted == "routine":
-                penalty += 0.2
-
-        score = max(0.0, (correct / total) - penalty)
-        return round(min(score, 1.0), 4)
-
-
-class ShortageDetectRubric(Rubric):
-    """Grader for shortage-detect task (F1 score)."""
-
-    def forward(self, action: MilSupplyAction, observation: MilSupplyObservation) -> float:
-        truth: Set[str] = set(observation.info.get("_ground_truth_shortages", []))
-        predicted: Set[str] = set(action.shortage_items or [])
-
-        if not truth:
-            return 1.0 if not predicted else 0.0
-        if not predicted:
-            return 0.0
-
-        tp = len(predicted & truth)
-        precision = tp / len(predicted)
-        recall = tp / len(truth)
-        if precision + recall == 0:
-            return 0.0
-        return round(2 * precision * recall / (precision + recall), 4)
-
-
-class OptimizeAllocationRubric(Rubric):
-    """Grader for optimize-allocation task."""
-
-    def forward(self, action: MilSupplyAction, observation: MilSupplyObservation) -> float:
-        allocations: List[Dict[str, Any]] = action.allocations or []
-        available: Dict[str, int] = observation.available_stock or {}
-        units_data: List[Dict[str, Any]] = observation.info.get("_units_with_needed", [])
-
-        # Build allocation map
-        alloc_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for entry in allocations:
-            unit = entry.get("unit", "")
-            item = entry.get("item", "")
-            qty = int(entry.get("quantity_allocated", 0))
-            if unit and item and qty > 0:
-                alloc_map[unit][item] += qty
-
-        # Check over-allocation
-        used: Dict[str, int] = defaultdict(int)
-        for unit_allocs in alloc_map.values():
-            for item, qty in unit_allocs.items():
-                used[item] += qty
-        over_allocated = any(used[item] > available.get(item, 0) for item in used)
-
-        # Compute weighted readiness gain
-        total_personnel = sum(u.get("personnel", 0) for u in units_data)
-        if total_personnel == 0:
-            return 0.0
-
-        weighted_score = 0.0
-        for u in units_data:
-            unit_name = u["unit"]
-            needed: Dict[str, int] = u.get("_needed_qty", {})
-            if not needed:
-                continue
-            item_scores = []
-            for item, qty_needed in needed.items():
-                qty_given = alloc_map[unit_name].get(item, 0)
-                item_scores.append(min(qty_given / qty_needed, 1.0) if qty_needed > 0 else 0.0)
-            unit_gain = sum(item_scores) / len(item_scores) if item_scores else 0.0
-            weight = u["personnel"] / total_personnel
-            weighted_score += unit_gain * weight
-
-        score = round(min(max(weighted_score, 0.0), 1.0), 4)
-        if over_allocated:
-            score = round(score * 0.5, 4)
-        return score
 
 
 # ===========================================================================
@@ -199,27 +99,106 @@ ALLOCATION_SCENARIOS = [
 
 
 # ===========================================================================
+# GRADER FUNCTIONS (replaces Rubric classes)
+# ===========================================================================
+
+def grade_priority_classify(action: MilSupplyAction, observation: MilSupplyObservation) -> float:
+    ground_truth: Dict[str, str] = observation.info.get("_ground_truth", {})
+    classifications: Dict[str, str] = action.classifications or {}
+    total = len(ground_truth)
+    if total == 0:
+        return 0.0
+    correct = 0
+    penalty = 0.0
+    for req_id, truth in ground_truth.items():
+        predicted = classifications.get(req_id, "").lower().strip()
+        if predicted == truth:
+            correct += 1
+        elif truth == "critical" and predicted == "routine":
+            penalty += 0.2
+    score = max(0.0, (correct / total) - penalty)
+    return round(min(score, 1.0), 4)
+
+
+def grade_shortage_detect(action: MilSupplyAction, observation: MilSupplyObservation) -> float:
+    truth: Set[str] = set(observation.info.get("_ground_truth_shortages", []))
+    predicted: Set[str] = set(action.shortage_items or [])
+    if not truth:
+        return 1.0 if not predicted else 0.0
+    if not predicted:
+        return 0.0
+    tp = len(predicted & truth)
+    precision = tp / len(predicted)
+    recall = tp / len(truth)
+    if precision + recall == 0:
+        return 0.0
+    return round(2 * precision * recall / (precision + recall), 4)
+
+
+def grade_optimize_allocation(action: MilSupplyAction, observation: MilSupplyObservation) -> float:
+    allocations: List[Dict[str, Any]] = action.allocations or []
+    available: Dict[str, int] = observation.available_stock or {}
+    units_data: List[Dict[str, Any]] = observation.info.get("_units_with_needed", [])
+
+    alloc_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for entry in allocations:
+        unit = entry.get("unit", "")
+        item = entry.get("item", "")
+        qty = int(entry.get("quantity_allocated", 0))
+        if unit and item and qty > 0:
+            alloc_map[unit][item] += qty
+
+    used: Dict[str, int] = defaultdict(int)
+    for unit_allocs in alloc_map.values():
+        for item, qty in unit_allocs.items():
+            used[item] += qty
+    over_allocated = any(used[item] > available.get(item, 0) for item in used)
+
+    total_personnel = sum(u.get("personnel", 0) for u in units_data)
+    if total_personnel == 0:
+        return 0.0
+
+    weighted_score = 0.0
+    for u in units_data:
+        unit_name = u["unit"]
+        needed: Dict[str, int] = u.get("_needed_qty", {})
+        if not needed:
+            continue
+        item_scores = []
+        for item, qty_needed in needed.items():
+            qty_given = alloc_map[unit_name].get(item, 0)
+            item_scores.append(min(qty_given / qty_needed, 1.0) if qty_needed > 0 else 0.0)
+        unit_gain = sum(item_scores) / len(item_scores) if item_scores else 0.0
+        weight = u["personnel"] / total_personnel
+        weighted_score += unit_gain * weight
+
+    score = round(min(max(weighted_score, 0.0), 1.0), 4)
+    if over_allocated:
+        score = round(score * 0.5, 4)
+    return score
+
+
+GRADERS = {
+    "priority-classify": grade_priority_classify,
+    "shortage-detect": grade_shortage_detect,
+    "optimize-allocation": grade_optimize_allocation,
+}
+
+
+# ===========================================================================
 # MAIN ENVIRONMENT CLASS
 # ===========================================================================
 
 class MilSupplyEnvironment(Environment):
     """
     Military Logistics & Supply Chain Environment.
-    Implements 3 tasks: priority-classify, shortage-detect, optimize-allocation.
+    Implements 3 tasks with graders: priority-classify, shortage-detect, optimize-allocation.
     """
-
-    # Rubrics for each task
-    _rubrics = {
-        "priority-classify": PriorityClassifyRubric(),
-        "shortage-detect": ShortageDetectRubric(),
-        "optimize-allocation": OptimizeAllocationRubric(),
-    }
 
     def __init__(self):
         super().__init__()
         self._state = MilSupplyState()
         self._current_observation: MilSupplyObservation = None
-        self._scenario: Dict[str, Any] = {}
 
     def reset(self, task: str = "priority-classify", seed: int = None) -> MilSupplyObservation:
         if seed is not None:
@@ -241,8 +220,8 @@ class MilSupplyEnvironment(Environment):
 
     def step(self, action: MilSupplyAction) -> MilSupplyObservation:
         task = action.task or self._state.active_task
-        rubric = self._rubrics.get(task, self._rubrics["priority-classify"])
-        reward = rubric(action, self._current_observation)
+        grader = GRADERS.get(task, grade_priority_classify)
+        reward = grader(action, self._current_observation)
 
         self._state.step_count += 1
         self._state.episode_done = True
@@ -266,10 +245,6 @@ class MilSupplyEnvironment(Environment):
     @property
     def state(self) -> MilSupplyState:
         return self._state
-
-    # -----------------------------------------------------------------------
-    # Reset helpers
-    # -----------------------------------------------------------------------
 
     def _reset_priority_classify(self) -> MilSupplyObservation:
         scenario = random.choice(PRIORITY_SCENARIOS)
