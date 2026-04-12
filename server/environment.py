@@ -130,6 +130,23 @@ class MilSupplyEnvironment(Environment):
         self._state = MilSupplyState()
         self._current_observation: MilSupplyObservation = None
 
+    @property
+    def tasks(self):
+        return [
+            {
+                "name": "priority-classify",
+                "grader": GRADERS["priority-classify"],
+            },
+            {
+                "name": "shortage-detect",
+                "grader": GRADERS["shortage-detect"],
+            },
+            {
+                "name": "optimize-allocation",
+                "grader": GRADERS["optimize-allocation"],
+            },
+        ]
+
     def reset(self, task: str = "priority-classify", seed: int = None) -> MilSupplyObservation:
         if seed is not None:
             random.seed(seed)
