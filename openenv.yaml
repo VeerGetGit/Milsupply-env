@@ -25,10 +25,11 @@ tasks:
       Classify each incoming supply request as critical, high, or routine
       based on operational context, mission criticality, and item type.
       The stated urgency from requesting units may be inaccurate.
-    score_range: [0.0, 1.0]
+    score_range: [0, 1]
     max_steps: 1
     reset_endpoint: /reset
     step_endpoint: /step
+    grader: task_definitions.py::grade_priority_classify
 
   - name: shortage-detect
     difficulty: medium
@@ -36,10 +37,11 @@ tasks:
       Given current inventory levels and pending unit requests, identify
       which items are critically short (below reorder threshold, resupply
       delayed more than 3 days, and requested by combat-critical units).
-    score_range: [0.0, 1.0]
+    score_range: [0, 1]
     max_steps: 1
     reset_endpoint: /reset
     step_endpoint: /step
+    grader: task_definitions.py::grade_shortage_detect
 
   - name: optimize-allocation
     difficulty: hard
@@ -47,10 +49,11 @@ tasks:
       Allocate a fixed stock of limited supplies across multiple operational
       units to maximize aggregate weighted operational readiness. Must not
       exceed available quantities for any item.
-    score_range: [0.0, 1.0]
+    score_range: [0, 1]
     max_steps: 1
     reset_endpoint: /reset
     step_endpoint: /step
+    grader: task_definitions.py::grade_optimize_allocation
 
 observation_space:
   type: object
@@ -68,7 +71,7 @@ action_space:
 
 reward:
   type: float
-  range: [0.0, 1.0]
+  range: [0, 1]
   description: >
     Partial credit reward based on task-specific Rubric grader:
     - priority-classify: fraction correct, minus penalty for critical-to-routine errors

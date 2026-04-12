@@ -75,7 +75,8 @@ def env_reset(task: str) -> Dict[str, Any]:
 
 
 def env_step(task: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    resp = requests.post(f"{ENV_URL}/step", json={"task": task, "payload": payload}, timeout=30)
+    payload["task"] = task
+    resp = requests.post(f"{ENV_URL}/step", json={"action": payload}, timeout=30)
     resp.raise_for_status()
     return resp.json()
 

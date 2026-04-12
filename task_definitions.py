@@ -2,10 +2,16 @@
 task_definitions.py — milsupply-env
 =====================================
 Grader functions for all three tasks.
+Scores are clamped strictly between 0.001 and 0.999.
 Imported by environment.py via GRADERS dict.
 """
 
 from typing import Any, Dict, List
+
+
+def _clamp(score: float) -> float:
+    """Clamp score to strictly (0, 1) as required by the OpenEnv validator."""
+    return round(min(max(score, 0.001), 0.999), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -16,13 +22,9 @@ def grade_priority_classify(
     action: Dict[str, Any],
     ground_truth: Dict[str, str],
 ) -> float:
-    """
-    Score = (correct / total) - 0.2 per critical-to-routine misclassification.
-    Clamped to [0.0, 1.0].
-    """
     classifications = action.get("classifications", {})
     if not ground_truth:
-        return 0.0
+        return 0.001
 
     total = len(ground_truth)
     correct = 0
@@ -35,11 +37,10 @@ def grade_priority_classify(
         if predicted == true_label_norm:
             correct += 1
         elif true_label_norm == "critical" and predicted == "routine":
-            # Dangerous misclassification — apply penalty
             penalty += 0.2
 
     score = (correct / total) - penalty
-    return round(min(max(score, 0.0), 1.0), 4)
+    return _clamp(score)
 
 
 # ---------------------------------------------------------------------------
@@ -50,26 +51,24 @@ def grade_shortage_detect(
     action: Dict[str, Any],
     ground_truth_shortages: List[str],
 ) -> float:
-    """
-    F1 score between predicted shortage_items and ground truth set.
-    """
     predicted = set(item.strip() for item in action.get("shortage_items", []))
     actual = set(item.strip() for item in ground_truth_shortages)
 
     if not actual and not predicted:
-        return 1.0
+        return 0.999
+
     if not actual or not predicted:
-        return 0.0
+        return 0.001
 
     tp = len(predicted & actual)
     precision = tp / len(predicted) if predicted else 0.0
     recall = tp / len(actual) if actual else 0.0
 
     if precision + recall == 0:
-        return 0.0
+        return 0.001
 
     f1 = 2 * precision * recall / (precision + recall)
-    return round(min(max(f1, 0.0), 1.0), 4)
+    return _clamp(f1)
 
 
 # ---------------------------------------------------------------------------
@@ -81,14 +80,8 @@ def grade_optimize_allocation(
     available_stock: Dict[str, int],
     units_with_needed: List[Dict[str, Any]],
 ) -> float:
-    """
-    Weighted readiness gain across all units, weighted by personnel count.
-    Score is halved if any item is over-allocated beyond available stock.
-    Clamped to [0.0, 1.0].
-    """
     allocations = action.get("allocations", [])
 
-    # Check for over-allocation
     allocated_totals: Dict[str, float] = {}
     for alloc in allocations:
         item = alloc.get("item", "")
@@ -100,7 +93,6 @@ def grade_optimize_allocation(
         for item in allocated_totals
     )
 
-    # Build lookup: {unit_name: {item: qty_allocated}}
     alloc_lookup: Dict[str, Dict[str, float]] = {}
     for alloc in allocations:
         unit = alloc.get("unit", "")
@@ -110,10 +102,9 @@ def grade_optimize_allocation(
             alloc_lookup[unit] = {}
         alloc_lookup[unit][item] = alloc_lookup[unit].get(item, 0.0) + qty
 
-    # Compute weighted readiness gain
     total_personnel = sum(u.get("personnel", 1) for u in units_with_needed)
     if total_personnel == 0:
-        return 0.0
+        return 0.001
 
     weighted_score = 0.0
     for unit in units_with_needed:
@@ -124,7 +115,6 @@ def grade_optimize_allocation(
         if not needed:
             continue
 
-        # Fraction of each needed item fulfilled
         item_scores = []
         for item, needed_qty in needed.items():
             if needed_qty <= 0:
@@ -140,7 +130,7 @@ def grade_optimize_allocation(
     if over_allocated:
         weighted_score *= 0.5
 
-    return round(min(max(weighted_score, 0.0), 1.0), 4)
+    return _clamp(weighted_score)
 
 
 # ---------------------------------------------------------------------------
