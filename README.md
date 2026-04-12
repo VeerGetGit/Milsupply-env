@@ -2,7 +2,7 @@
 
 **Military Logistics & Supply Chain** — an OpenEnv environment where AI agents manage real-world defense supply operations.
 
-> 🚀 **Live Demo:** `https://YOUR_HF_USERNAME-milsupply-env.hf.space`  
+> 🚀 **Live Demo:** `https://RegeeHugging-milsupply-env.hf.space`  
 > Replace with your actual HuggingFace Space URL after deployment.
 
 ---
@@ -152,21 +152,21 @@ Server will be available at `http://localhost:7860`.
 Once deployed, you can interact with the environment at:
 
 ```
-https://YOUR_HF_USERNAME-milsupply-env.hf.space
+https://RegeeHugging-milsupply-env.hf.space
 ```
 
 Example:
 ```bash
 # Health check
-curl https://YOUR_HF_USERNAME-milsupply-env.hf.space/health
+curl https://RegeeHugging-milsupply-env.hf.space/health
 
 # Reset to a task
-curl -X POST https://YOUR_HF_USERNAME-milsupply-env.hf.space/reset \
+curl -X POST https://RegeeHugging-milsupply-env.hf.space/reset \
   -H "Content-Type: application/json" \
   -d '{"task": "priority-classify"}'
 
 # Submit action
-curl -X POST https://YOUR_HF_USERNAME-milsupply-env.hf.space/step \
+curl -X POST https://RegeeHugging-milsupply-env.hf.space/step \
   -H "Content-Type: application/json" \
   -d '{"task": "priority-classify", "payload": {"classifications": {"REQ-001": "critical"}}}'
 ```
