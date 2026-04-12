@@ -1,109 +1,19 @@
 """
 milsupply-env — Military Logistics & Supply Chain
 ===================================================
-Uses OpenEnv Environment base class with Rubric graders for all 3 tasks.
-Scores are strictly between 0.001 and 0.999 as required by validator.
+Uses OpenEnv Environment base class.
+Graders are defined in task_definitions.py at root.
 """
 
 import random
-from collections import defaultdict
-from typing import Any, Dict, List, Set
+import sys
+from typing import Any, Dict, List
+
+sys.path.insert(0, "/app")
 
 from openenv.core.env_server import Environment
-from openenv.core.rubrics import Rubric
 from models import MilSupplyAction, MilSupplyObservation, MilSupplyState
-
-
-# ===========================================================================
-# SCORE CLAMPING — strictly between 0 and 1
-# ===========================================================================
-
-def clamp(score: float) -> float:
-    """Ensure score is strictly between 0.001 and 0.999."""
-    return round(max(0.001, min(score, 0.999)), 4)
-
-
-# ===========================================================================
-# RUBRIC GRADERS
-# ===========================================================================
-
-class PriorityClassifyRubric(Rubric):
-    def forward(self, action: Any, observation: Any) -> float:
-        ground_truth: Dict[str, str] = observation.info.get("_ground_truth", {})
-        classifications: Dict[str, str] = (action.classifications or {}) if hasattr(action, "classifications") else {}
-        total = len(ground_truth)
-        if total == 0:
-            return 0.001
-        correct = 0
-        penalty = 0.0
-        for req_id, truth in ground_truth.items():
-            predicted = classifications.get(req_id, "").lower().strip()
-            if predicted == truth:
-                correct += 1
-            elif truth == "critical" and predicted == "routine":
-                penalty += 0.2
-        score = max(0.0, (correct / total) - penalty)
-        return clamp(score)
-
-
-class ShortageDetectRubric(Rubric):
-    def forward(self, action: Any, observation: Any) -> float:
-        truth: Set[str] = set(observation.info.get("_ground_truth_shortages", []))
-        predicted: Set[str] = set(action.shortage_items or []) if hasattr(action, "shortage_items") and action.shortage_items else set()
-        if not truth:
-            return 0.999 if not predicted else 0.001
-        if not predicted:
-            return 0.001
-        tp = len(predicted & truth)
-        precision = tp / len(predicted)
-        recall = tp / len(truth)
-        if precision + recall == 0:
-            return 0.001
-        f1 = 2 * precision * recall / (precision + recall)
-        return clamp(f1)
-
-
-class OptimizeAllocationRubric(Rubric):
-    def forward(self, action: Any, observation: Any) -> float:
-        allocations: List[Dict[str, Any]] = (action.allocations or []) if hasattr(action, "allocations") and action.allocations else []
-        available: Dict[str, int] = observation.available_stock or {}
-        units_data: List[Dict[str, Any]] = observation.info.get("_units_with_needed", [])
-
-        alloc_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for entry in allocations:
-            unit = entry.get("unit", "")
-            item = entry.get("item", "")
-            qty = int(entry.get("quantity_allocated", 0))
-            if unit and item and qty > 0:
-                alloc_map[unit][item] += qty
-
-        used: Dict[str, int] = defaultdict(int)
-        for unit_allocs in alloc_map.values():
-            for item, qty in unit_allocs.items():
-                used[item] += qty
-        over_allocated = any(used[item] > available.get(item, 0) for item in used)
-
-        total_personnel = sum(u.get("personnel", 0) for u in units_data)
-        if total_personnel == 0:
-            return 0.001
-
-        weighted_score = 0.0
-        for u in units_data:
-            unit_name = u["unit"]
-            needed: Dict[str, int] = u.get("_needed_qty", {})
-            if not needed:
-                continue
-            item_scores = [
-                min(alloc_map[unit_name].get(item, 0) / qty_needed, 1.0)
-                for item, qty_needed in needed.items() if qty_needed > 0
-            ]
-            unit_gain = sum(item_scores) / len(item_scores) if item_scores else 0.0
-            weighted_score += unit_gain * (u["personnel"] / total_personnel)
-
-        score = min(max(weighted_score, 0.0), 1.0)
-        if over_allocated:
-            score *= 0.5
-        return clamp(score)
+from task_definitions import GRADERS
 
 
 # ===========================================================================
@@ -199,13 +109,8 @@ ALLOCATION_SCENARIOS = [
 class MilSupplyEnvironment(Environment):
     """
     Military Logistics & Supply Chain Environment.
-    3 tasks with Rubric graders: priority-classify, shortage-detect, optimize-allocation.
+    3 tasks with graders: priority-classify, shortage-detect, optimize-allocation.
     """
-
-    # Register rubrics so validator can detect them
-    priority_rubric = PriorityClassifyRubric()
-    shortage_rubric = ShortageDetectRubric()
-    allocation_rubric = OptimizeAllocationRubric()
 
     def __init__(self):
         super().__init__()
@@ -229,13 +134,24 @@ class MilSupplyEnvironment(Environment):
 
     def step(self, action: MilSupplyAction) -> MilSupplyObservation:
         task = action.task if hasattr(action, "task") and action.task else self._state.active_task
+        action_dict = action.dict() if hasattr(action, "dict") else {}
 
         if task == "shortage-detect":
-            reward = self.shortage_rubric(action, self._current_observation)
+            reward = GRADERS["shortage-detect"](
+                action_dict,
+                self._current_observation.info.get("_ground_truth_shortages", [])
+            )
         elif task == "optimize-allocation":
-            reward = self.allocation_rubric(action, self._current_observation)
+            reward = GRADERS["optimize-allocation"](
+                action_dict,
+                self._current_observation.available_stock or {},
+                self._current_observation.info.get("_units_with_needed", [])
+            )
         else:
-            reward = self.priority_rubric(action, self._current_observation)
+            reward = GRADERS["priority-classify"](
+                action_dict,
+                self._current_observation.info.get("_ground_truth", {})
+            )
 
         self._state.step_count += 1
         self._state.episode_done = True
