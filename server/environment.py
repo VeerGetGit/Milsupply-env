@@ -124,25 +124,24 @@ class MilSupplyEnvironment(Environment):
     Military Logistics & Supply Chain Environment.
     Uses module-level cache to share state across thread pool workers.
     """
-
+    
+    tasks = {
+    "priority-classify": {
+        "grader": GRADERS["priority-classify"],
+    },
+    "shortage-detect": {
+        "grader": GRADERS["shortage-detect"],
+    },
+    "optimize-allocation": {
+        "grader": GRADERS["optimize-allocation"],
+    },
+    }
+    
     def __init__(self):
         super().__init__()
         self._state = MilSupplyState()
         self._current_observation: MilSupplyObservation = None
 
-    @property
-    def tasks(self):
-        return {
-            "priority-classify": {
-                "grader": GRADERS["priority-classify"],
-            },
-            "shortage-detect": {
-                "grader": GRADERS["shortage-detect"],
-            },
-            "optimize-allocation": {
-                "grader": GRADERS["optimize-allocation"],
-            },
-        }
 
     def reset(self, task: str = "priority-classify", seed: int = None) -> MilSupplyObservation:
         if seed is not None:
