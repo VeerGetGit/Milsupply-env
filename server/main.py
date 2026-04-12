@@ -6,6 +6,7 @@ Implements the full OpenEnv interface:
   POST /step    → takes action, returns observation + reward + done + info
   GET  /state   → returns current env state
   GET  /health  → health check
+  GET  /tasks   → list available tasks
 """
 
 import os
@@ -37,8 +38,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 TASKS = {
-    "priority-classify": PriorityClassifyTask,
-    "shortage-detect":   ShortageDetectTask,
+    "priority-classify":   PriorityClassifyTask,
+    "shortage-detect":     ShortageDetectTask,
     "optimize-allocation": OptimizeAllocationTask,
 }
 
@@ -147,16 +148,22 @@ def list_tasks():
                 "name": "priority-classify",
                 "difficulty": "easy",
                 "description": "Classify supply requests by urgency (critical/high/routine)",
+                "score_range": [0.0, 1.0],
+                "max_steps": 1,
             },
             {
                 "name": "shortage-detect",
                 "difficulty": "medium",
                 "description": "Identify critically short supply items given inventory + pending requests",
+                "score_range": [0.0, 1.0],
+                "max_steps": 1,
             },
             {
                 "name": "optimize-allocation",
                 "difficulty": "hard",
                 "description": "Allocate limited supplies across units to maximize operational readiness",
+                "score_range": [0.0, 1.0],
+                "max_steps": 1,
             },
         ]
     }

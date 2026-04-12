@@ -6,15 +6,13 @@ Agent receives a list of supply requests and must classify each as:
   - high       (operationally important, needed within 24h)
   - routine    (can wait 72h+)
 
-Grader: F1-style partial credit per request.
+Grader: partial credit per request.
 Score = (correct classifications) / (total requests)
-Partial penalty for critical misclassified as routine (-0.2 per such error).
+Penalty of -0.2 per critical request misclassified as routine (dangerous error).
 """
 
 import random
 from typing import Any, Dict, List, Tuple
-
-from models import SupplyRequest
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +42,7 @@ SCENARIOS: List[Dict[str, Any]] = [
                 "unit": "Support Battalion",
                 "item": "Printer paper",
                 "quantity_requested": 500,
-                "urgency_stated": "urgent",  # unit over-stated urgency
+                "urgency_stated": "urgent",
                 "location": "Base Camp",
                 "mission_criticality": "support",
                 "_ground_truth": "routine",
@@ -54,7 +52,7 @@ SCENARIOS: List[Dict[str, Any]] = [
                 "unit": "2nd Armored",
                 "item": "Tank ammunition (120mm)",
                 "quantity_requested": 40,
-                "urgency_stated": "routine",  # unit under-stated urgency
+                "urgency_stated": "routine",
                 "location": "Grid 4419",
                 "mission_criticality": "combat",
                 "_ground_truth": "critical",
@@ -154,7 +152,7 @@ SCENARIOS: List[Dict[str, Any]] = [
 
 
 # ---------------------------------------------------------------------------
-# Task state
+# Task class
 # ---------------------------------------------------------------------------
 
 class PriorityClassifyTask:
@@ -165,7 +163,9 @@ class PriorityClassifyTask:
         self._ground_truth: Dict[str, str] = {}
         self._attempts = 0
 
-    def reset(self) -> Dict[str, Any]:
+    def reset(self, seed: int = None) -> Dict[str, Any]:
+        if seed is not None:
+            random.seed(seed)
         self._scenario = random.choice(SCENARIOS)
         self._ground_truth = {
             r["request_id"]: r["_ground_truth"]
@@ -200,7 +200,6 @@ class PriorityClassifyTask:
                 correct += 1
                 details[req_id] = {"result": "correct", "truth": truth, "predicted": predicted}
             else:
-                # Extra penalty for critical misclassified as routine (dangerous error)
                 if truth == "critical" and predicted == "routine":
                     critical_miss_penalty += 0.2
                 details[req_id] = {"result": "wrong", "truth": truth, "predicted": predicted}
@@ -212,7 +211,7 @@ class PriorityClassifyTask:
         return (
             self._build_observation(),
             score,
-            True,  # single-step task
+            True,
             {
                 "correct": correct,
                 "total": total,

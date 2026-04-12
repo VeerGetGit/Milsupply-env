@@ -16,9 +16,9 @@ class SupplyRequest(BaseModel):
     unit: str
     item: str
     quantity_requested: int
-    urgency_stated: str  # stated by the requesting unit (may be wrong)
+    urgency_stated: str          # stated by the requesting unit (may be wrong)
     location: str
-    mission_criticality: str  # "combat", "support", "training"
+    mission_criticality: str     # "combat", "support", "training"
 
 
 class InventoryItem(BaseModel):
@@ -32,7 +32,7 @@ class UnitStatus(BaseModel):
     unit: str
     location: str
     personnel: int
-    current_readiness_pct: float  # 0–100
+    current_readiness_pct: float     # 0–100
     critical_items_needed: List[str]
 
 
@@ -72,7 +72,6 @@ class OptimizeAllocationAction(BaseModel):
     )
 
 
-# Union action type used by the API
 class AgentAction(BaseModel):
     task: str = Field(..., description="Task name: priority-classify | shortage-detect | optimize-allocation")
     payload: Dict[str, Any] = Field(..., description="Task-specific action payload")
@@ -85,7 +84,7 @@ class AgentAction(BaseModel):
 class PriorityClassifyObservation(BaseModel):
     task: str = "priority-classify"
     supply_requests: List[SupplyRequest]
-    context: str  # situational briefing
+    context: str
 
 
 class ShortageDetectObservation(BaseModel):
@@ -97,7 +96,7 @@ class ShortageDetectObservation(BaseModel):
 
 class OptimizeAllocationObservation(BaseModel):
     task: str = "optimize-allocation"
-    available_stock: Dict[str, int]   # item -> qty available
+    available_stock: Dict[str, int]
     units: List[UnitStatus]
     pending_requests: List[SupplyRequest]
     context: str

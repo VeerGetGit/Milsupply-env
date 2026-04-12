@@ -16,7 +16,9 @@ tags:
   - defense
   - resource-allocation
 
-env_url: "https://RegeeHugging-Milsupply-env.hf.space"
+# TODO: Replace with your actual HuggingFace Space URL
+# Format: https://<your-hf-username>-milsupply-env.hf.space
+env_url: "https://YOUR_HF_USERNAME-milsupply-env.hf.space"
 
 tasks:
   - name: priority-classify
