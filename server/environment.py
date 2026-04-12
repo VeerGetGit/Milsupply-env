@@ -1,8 +1,8 @@
 """
 milsupply-env — Military Logistics & Supply Chain
 ===================================================
-Uses OpenEnv Environment base class.
-Graders are defined in task_definitions.py at root.
+Stateless design: ground truth is re-derived from the action's task
+using a fixed seed stored in a module-level cache keyed by task.
 """
 
 import random
@@ -101,6 +101,19 @@ ALLOCATION_SCENARIOS = [
     },
 ]
 
+# Module-level cache: stores last scenario index per task
+# This works because openenv-core uses a single process with thread pool
+_SCENARIO_CACHE: Dict[str, int] = {}
+
+
+def _get_scenario_index(task: str, scenarios: list) -> int:
+    idx = _SCENARIO_CACHE.get(task, 0)
+    return idx % len(scenarios)
+
+
+def _set_scenario_index(task: str, idx: int):
+    _SCENARIO_CACHE[task] = idx
+
 
 # ===========================================================================
 # MAIN ENVIRONMENT CLASS
@@ -109,7 +122,7 @@ ALLOCATION_SCENARIOS = [
 class MilSupplyEnvironment(Environment):
     """
     Military Logistics & Supply Chain Environment.
-    3 tasks with graders: priority-classify, shortage-detect, optimize-allocation.
+    Uses module-level cache to share state across thread pool workers.
     """
 
     def __init__(self):
@@ -136,41 +149,52 @@ class MilSupplyEnvironment(Environment):
         task = action.task if hasattr(action, "task") and action.task else self._state.active_task
         action_dict = action.dict() if hasattr(action, "dict") else {}
 
+        # Stateless fallback: re-derive ground truth from cached scenario index
         if self._current_observation is None:
             self.reset(task)
 
         if task == "shortage-detect":
-            reward = GRADERS["shortage-detect"](
-                action_dict,
-                self._current_observation.info.get("_ground_truth_shortages", [])
-            )
+            idx = _get_scenario_index(task, SHORTAGE_SCENARIOS)
+            scenario = SHORTAGE_SCENARIOS[idx]
+            ground_truth = scenario["_ground_truth_shortages"]
+            reward = GRADERS["shortage-detect"](action_dict, ground_truth)
         elif task == "optimize-allocation":
+            idx = _get_scenario_index(task, ALLOCATION_SCENARIOS)
+            scenario = ALLOCATION_SCENARIOS[idx]
             reward = GRADERS["optimize-allocation"](
                 action_dict,
-                self._current_observation.available_stock or {},
-                self._current_observation.info.get("_units_with_needed", [])
+                scenario["available_stock"],
+                scenario["units"],
             )
         else:
-            reward = GRADERS["priority-classify"](
-                action_dict,
-                self._current_observation.info.get("_ground_truth", {})
-            )
+            idx = _get_scenario_index(task, PRIORITY_SCENARIOS)
+            scenario = PRIORITY_SCENARIOS[idx]
+            ground_truth = {r["request_id"]: r["_ground_truth"] for r in scenario["requests"]}
+            reward = GRADERS["priority-classify"](action_dict, ground_truth)
 
         self._state.step_count += 1
         self._state.episode_done = True
         self._state.last_reward = reward
 
+        context = self._current_observation.context if self._current_observation else ""
+        supply_requests = self._current_observation.supply_requests if self._current_observation else None
+        inventory = self._current_observation.inventory if self._current_observation else None
+        pending_requests = self._current_observation.pending_requests if self._current_observation else None
+        available_stock = self._current_observation.available_stock if self._current_observation else None
+        units = self._current_observation.units if self._current_observation else None
+        info = self._current_observation.info if self._current_observation else {}
+
         obs = MilSupplyObservation(
             task=task,
-            context=self._current_observation.context,
+            context=context,
             reward=reward,
             done=True,
-            info={**self._current_observation.info, "reward": reward},
-            supply_requests=self._current_observation.supply_requests,
-            inventory=self._current_observation.inventory,
-            pending_requests=self._current_observation.pending_requests,
-            available_stock=self._current_observation.available_stock,
-            units=self._current_observation.units,
+            info={**info, "reward": reward},
+            supply_requests=supply_requests,
+            inventory=inventory,
+            pending_requests=pending_requests,
+            available_stock=available_stock,
+            units=units,
         )
         self._current_observation = obs
         return obs
@@ -180,7 +204,9 @@ class MilSupplyEnvironment(Environment):
         return self._state
 
     def _reset_priority_classify(self) -> MilSupplyObservation:
-        scenario = random.choice(PRIORITY_SCENARIOS)
+        idx = random.randint(0, len(PRIORITY_SCENARIOS) - 1)
+        _set_scenario_index("priority-classify", idx)
+        scenario = PRIORITY_SCENARIOS[idx]
         ground_truth = {r["request_id"]: r["_ground_truth"] for r in scenario["requests"]}
         clean_requests = [{k: v for k, v in r.items() if not k.startswith("_")} for r in scenario["requests"]]
         return MilSupplyObservation(
@@ -191,7 +217,9 @@ class MilSupplyEnvironment(Environment):
         )
 
     def _reset_shortage_detect(self) -> MilSupplyObservation:
-        scenario = random.choice(SHORTAGE_SCENARIOS)
+        idx = random.randint(0, len(SHORTAGE_SCENARIOS) - 1)
+        _set_scenario_index("shortage-detect", idx)
+        scenario = SHORTAGE_SCENARIOS[idx]
         return MilSupplyObservation(
             task="shortage-detect",
             context=scenario["context"],
@@ -201,7 +229,9 @@ class MilSupplyEnvironment(Environment):
         )
 
     def _reset_optimize_allocation(self) -> MilSupplyObservation:
-        scenario = random.choice(ALLOCATION_SCENARIOS)
+        idx = random.randint(0, len(ALLOCATION_SCENARIOS) - 1)
+        _set_scenario_index("optimize-allocation", idx)
+        scenario = ALLOCATION_SCENARIOS[idx]
         clean_units = [{k: v for k, v in u.items() if not k.startswith("_")} for u in scenario["units"]]
         return MilSupplyObservation(
             task="optimize-allocation",
